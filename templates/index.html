@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STEMScholar Offline</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">S</div>
+      <div>
+        <div class="brand-name">STEMScholar</div>
+        <div class="brand-sub">Offline &middot; No internet needed</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Subject</div>
+      <div class="segmented" id="subjectSeg">
+        {% for key, name in subjects.items() %}
+        <button class="seg-btn {% if loop.index == 1 %}active{% endif %}" data-subject="{{ key }}">{{ name }}</button>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Your notes</div>
+      <label class="note-toggle">
+        <input type="checkbox" id="useNotes"> <span class="toggle-text">Use my notes (search)</span>
+      </label>
+      <div class="note-list" id="noteList">
+        <div class="empty">No notes yet.</div>
+      </div>
+      <div class="note-form" id="noteForm" style="display:none;">
+        <input type="text" id="noteName" placeholder="Filename (e.g. mechanics.txt)">
+        <textarea id="noteText" rows="4" placeholder="Paste your notes here..."></textarea>
+        <div class="note-actions">
+          <button class="btn btn-sm btn-outline" id="cancelNote">Cancel</button>
+          <button class="btn btn-sm" id="saveNote">Save</button>
+        </div>
+      </div>
+      <div class="note-actions" style="justify-content:space-between;">
+        <button class="btn btn-sm btn-outline" id="addNote">+ Add note</button>
+        <button class="btn btn-sm btn-outline" id="rebuildIndex">Rebuild index</button>
+      </div>
+      <div class="hint">Notes are .txt files in the notes/ folder.</div>
+    </div>
+
+    <div class="panel model-panel">
+      <div class="panel-title">Chat model</div>
+      <div class="model-row">
+        <span class="model-name" id="modelDisplay">{{ model }}</span>
+      </div>
+      <div class="hint">Switch via STEM_MODEL in .env</div>
+    </div>
+
+    <div class="status" id="status">
+      <span class="dot" id="dot"></span>
+      <span id="statusText">Checking Ollama&hellip;</span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="header">
+      <div class="header-left">
+        <h1>STEMScholar <span class="muted">Offline</span></h1>
+        <p class="header-sub">Physics &middot; Mathematics &middot; Chemistry &mdash; for secondary &amp; university students</p>
+      </div>
+      <div class="header-right">
+        <span class="badge" id="subjectBadge">Physics</span>
+      </div>
+    </header>
+
+    <div class="chat-wrap">
+      <div class="messages" id="messages">
+        <div class="msg bot">
+          <div class="bubble">Hello! I&rsquo;m STEMScholar, your offline study assistant. Ask me about Physics, Mathematics, or Chemistry. Turn on &ldquo;Use my notes&rdquo; to search your own saved notes.</div>
+        </div>
+      </div>
+      <div class="composer">
+        <form id="chatForm" autocomplete="off">
+          <textarea id="userInput" rows="1" placeholder="Type your question&hellip;"></textarea>
+          <button type="submit" id="sendBtn" class="send">Send</button>
+        </form>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
