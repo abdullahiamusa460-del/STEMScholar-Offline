@@ -676,6 +676,33 @@ function saveSettings() {
   }).catch(() => {});
 }
 
+
+function applySettings(s) {
+  document.body.dataset.theme = s.theme;
+  document.documentElement.style.setProperty("--accent", s.accent);
+  document.body.dataset.accent = s.accent;
+  fontSizeRange.value = s.font_size;
+  fontSizeVal.textContent = s.font_size + "px";
+  document.documentElement.style.setProperty("--font-size", s.font_size + "px");
+  temperatureRange.value = s.temperature;
+  temperatureVal.textContent = s.temperature;
+  maxTokensRange.value = s.max_tokens;
+  maxTokensVal.textContent = s.max_tokens;
+  settingStream.checked = s.stream;
+  streamIndicator.textContent = s.stream ? "on" : "off";
+  modelSelect.value = s.model;
+  settingModel.value = s.model;
+  if (modelBadge) modelBadge.textContent = s.model;
+  themeSeg.querySelectorAll(".seg-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.theme === s.theme);
+  });
+  colorPicker.querySelectorAll(".color-swatch").forEach(sw => {
+    const computed = getComputedStyle(sw);
+    const bg = computed.backgroundColor;
+    sw.classList.toggle("active", bg === rgbToHexInline(s.accent));
+  });
+}
+
 function rgbToHexInline(rgb) {
   const m = rgb.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/);
   if (!m) return "#22d3ee";
