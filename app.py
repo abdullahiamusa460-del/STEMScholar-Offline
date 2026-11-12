@@ -489,18 +489,23 @@ def api_chat():
                 full = ""
                 last_yield = time.time()
                 try:
-                    for chunk in ollama_chat_stream(
+                    # Use non-streaming call to get complete answer (content only),
+                    # since gemma4 puts reasoning in 'thinking' field during streaming
+                    r = ollama_chat(
                         model, messages, temperature, top_p, top_k,
-                        repeat_penalty, max_tokens
-                    ):
-                        if chunk:
-                            full += chunk
-                            yield "data: " + json.dumps({"chunk": chunk}) + "\n\n"
-                            last_yield = time.time()
-                        # Keep-alive ping every 5 seconds during thinking phase
-                        elif time.time() - last_yield > 5:
-                            yield ": keep-alive\n\n"
-                            last_yield = time.time()
+                        repeat_penalty, max_tokens, stream=False
+                    )
+                    data = r.json()
+                    full = _extract_text(data.get("message", {}))
+                    # Simulate streaming by yielding in small chunks
+                    chunk_size = 30
+                    for i in range(0, len(full), chunk_size):
+                        piece = full[i:i + chunk_size]
+                        yield "data: " + json.dumps({"chunk": piece}) + "\n\n"
+                        last_yield = time.time()
+                        # Small delay to simulate typing
+                        import time as _t
+                        _t.sleep(0.03)
                     assistant_msg = {
                         "role": "assistant",
                         "content": full,
