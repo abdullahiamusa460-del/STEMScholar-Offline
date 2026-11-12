@@ -2,3 +2,8 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
+
+# STEMScholar app data
+chats/
+user_settings.json
+notes_index.json

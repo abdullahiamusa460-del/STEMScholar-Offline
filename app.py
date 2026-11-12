@@ -1,6 +1,7 @@
 import os
 import json
 import math
+import uuid
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify
 import requests
@@ -8,6 +9,8 @@ import requests
 BASE_DIR = Path(__file__).resolve().parent
 NOTES_DIR = BASE_DIR / "notes"
 INDEX_FILE = BASE_DIR / "notes_index.json"
+CHATS_DIR = BASE_DIR / "chats"
+SETTINGS_FILE = BASE_DIR / "user_settings.json"
 
 # Load .env manually (no extra dependency)
 def load_env(path):
@@ -22,6 +25,37 @@ def load_env(path):
 
 load_env(BASE_DIR / ".env")
 
+
+def default_settings():
+    return {
+        "theme": "dark",
+        "accent": "#22d3ee",
+        "font_size": 14,
+        "temperature": 0.4,
+        "max_tokens": 700,
+        "model": STEM_MODEL,
+        "subject": "physics",
+        "use_notes": False,
+        "stream": True,
+    }
+
+
+def load_settings():
+    if SETTINGS_FILE.exists():
+        try:
+            s = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            d = default_settings()
+            for k, v in d.items():
+                s.setdefault(k, v)
+            return s
+        except Exception:
+            pass
+    return default_settings()
+
+
+def save_settings(settings):
+    SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 STEM_MODEL = os.environ.get("STEM_MODEL", "gemma4:e2b-it-qat")
 EMBED_MODEL = os.environ.get("STEM_EMBED_MODEL", "snowflake-arctic-embed:33m")
@@ -30,38 +64,82 @@ SUBJECTS = {
     "physics": "Physics",
     "mathematics": "Mathematics",
     "chemistry": "Chemistry",
+    "biology": "Biology",
+    "computer_science": "Computer Science",
+    "engineering": "Engineering",
+}
+
+SUBJECT_SYSTEM_PROMPTS = {
+    "physics": (
+        "You are STEMScholar, an offline study assistant. You specialize in Physics. "
+        "Answer clearly with step-by-step working, formulas, and short examples. "
+        "Use simple English suitable for secondary and university students. "
+        "If a question is not about Physics, politely say so. You run fully offline."
+    ),
+    "mathematics": (
+        "You are STEMScholar, an offline study assistant. You specialize in Mathematics. "
+        "Show step-by-step working, explain the reasoning, and include worked examples. "
+        "Use simple English. If a question is not about Math, politely say so. You run fully offline."
+    ),
+    "chemistry": (
+        "You are STEMScholar, an offline study assistant. You specialize in Chemistry. "
+        "Explain reactions, equations, and concepts clearly with examples. "
+        "Use simple English. If a question is not about Chemistry, politely say so. You run fully offline."
+    ),
+    "biology": (
+        "You are STEMScholar, an offline study assistant. You specialize in Biology. "
+        "Explain concepts, processes, and terminology clearly with examples. "
+        "Use simple English. If a question is not about Biology, politely say so. You run fully offline."
+    ),
+    "computer_science": (
+        "You are STEMScholar, an offline study assistant. You specialize in Computer Science. "
+        "Explain algorithms, programming, and concepts clearly. Include code examples when helpful. "
+        "Use simple English. If a question is not about Computer Science, politely say so. You run fully offline."
+    ),
+    "engineering": (
+        "You are STEMScholar, an offline study assistant. You specialize in Engineering. "
+        "Explain principles, calculations, and design concepts with worked examples. "
+        "Use simple English. If a question is not about Engineering, politely say so. You run fully offline."
+    ),
 }
 
 app = Flask(__name__)
 NOTES_DIR.mkdir(exist_ok=True)
-
-SYSTEM_PROMPT = (
-    "You are STEMScholar, an offline study assistant for secondary and university students. "
-    "You ONLY answer questions about Physics, Mathematics, and Chemistry. "
-    "If asked about anything else, politely say you can only help with those three subjects. "
-    "Use clear, simple English suitable for students. Include short examples and step-by-step "
-    "working when helpful. Keep answers concise and to the point. You run offline on the user's laptop."
-)
+CHATS_DIR.mkdir(exist_ok=True)
 
 
-def ollama_chat(model, messages):
+
+
+def ollama_chat(model, messages, temperature=0.4, max_tokens=700, stream=False):
     url = f"{OLLAMA_HOST}/api/chat"
     payload = {
         "model": model,
         "messages": messages,
-        "stream": False,
+        "stream": stream,
         "options": {
-            "temperature": 0.4,
-            "num_predict": 700,      # allow longer answers
+            "temperature": temperature,
+            "num_predict": max_tokens,
         },
     }
-    # Long timeout: first message may load the model into RAM (can be slow offline)
-    r = requests.post(url, json=payload, timeout=600)
+    r = requests.post(url, json=payload, stream=stream, timeout=600)
     r.raise_for_status()
-    return r.json()["message"]["content"]
+    return r
 
 
-def ollama_chat_stream(model, messages):
+def _extract_text(msg):
+    """Extract text from an Ollama message, supporting both 'content' and 'thinking' fields."""
+    content = msg.get("content", "") or ""
+    thinking = msg.get("thinking", "") or ""
+    if thinking and not content:
+        return thinking
+    if content and not thinking:
+        return content
+    if thinking and content:
+        return thinking + "\n\n" + content
+    return content
+
+
+def ollama_chat_stream(model, messages, temperature=0.4, max_tokens=700):
     """Yield response chunks from Ollama streaming chat."""
     url = f"{OLLAMA_HOST}/api/chat"
     payload = {
@@ -69,8 +147,8 @@ def ollama_chat_stream(model, messages):
         "messages": messages,
         "stream": True,
         "options": {
-            "temperature": 0.4,
-            "num_predict": 700,      # allow longer answers
+            "temperature": temperature,
+            "num_predict": max_tokens,
         },
     }
     r = requests.post(url, json=payload, stream=True, timeout=600)
@@ -83,9 +161,9 @@ def ollama_chat_stream(model, messages):
         except json.JSONDecodeError:
             continue
         msg = data.get("message", {})
-        content = msg.get("content", "")
-        if content:
-            yield content
+        text = _extract_text(msg)
+        if text:
+            yield text
         if data.get("done"):
             break
 
@@ -191,29 +269,161 @@ def search_notes(query, top_k=4):
     return results[:top_k]
 
 
+# ---------- Chat session helpers ----------
+
+def chat_path(chat_id):
+    return CHATS_DIR / f"{chat_id}.json"
+
+
+def list_chats():
+    chats = []
+    if CHATS_DIR.exists():
+        for f in sorted(CHATS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                chats.append({
+                    "id": data.get("id", f.stem),
+                    "title": data.get("title", "New chat"),
+                    "subject": data.get("subject", "physics"),
+                    "model": data.get("model", STEM_MODEL),
+                    "updated_at": data.get("updated_at", ""),
+                    "message_count": len(data.get("messages", [])),
+                })
+            except Exception:
+                continue
+    return chats
+
+
+def load_chat(chat_id):
+    p = chat_path(chat_id)
+    if p.exists():
+        return json.loads(p.read_text(encoding="utf-8"))
+    return None
+
+
+def save_chat(chat):
+    import datetime
+    chat["updated_at"] = chat.get("updated_at") or datetime.datetime.utcnow().isoformat()
+    if not chat.get("id"):
+        chat["id"] = str(uuid.uuid4())
+    if not chat.get("title"):
+        chat["title"] = "New chat"
+    chat_path(chat["id"]).write_text(json.dumps(chat, indent=2), encoding="utf-8")
+    return chat
+
+
+def new_chat(subject="physics", model=STEM_MODEL, title=None):
+    import datetime
+    now = datetime.datetime.utcnow().isoformat()
+    chat = {
+        "id": str(uuid.uuid4()),
+        "title": title or f"New {SUBJECTS.get(subject, subject)} chat",
+        "subject": subject,
+        "model": model,
+        "created_at": now,
+        "updated_at": now,
+        "messages": [],
+    }
+    save_chat(chat)
+    return chat
+
+
 @app.route("/")
 def home():
-    return render_template("index.html", subjects=SUBJECTS, model=STEM_MODEL)
+    settings = load_settings()
+    return render_template(
+        "index.html",
+        subjects=SUBJECTS,
+        model=settings.get("model", STEM_MODEL),
+        settings=settings,
+    )
 
 
 @app.route("/api/status")
 def status():
+    settings = load_settings()
     try:
         r = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
         models = [m.get("name", "") for m in r.json().get("models", [])]
         return jsonify({
             "ollama": True,
             "models": models,
-            "stem_model": STEM_MODEL,
-            "model_ready": STEM_MODEL in models,
+            "stem_model": settings.get("model", STEM_MODEL),
+            "model_ready": settings.get("model", STEM_MODEL) in models,
         })
     except Exception:
+        settings = load_settings()
         return jsonify({
             "ollama": False,
             "models": [],
-            "stem_model": STEM_MODEL,
+            "stem_model": settings.get("model", STEM_MODEL),
             "model_ready": False,
         })
+
+
+
+
+@app.route("/api/models")
+def api_models():
+    """Return available Ollama models."""
+    try:
+        r = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
+        models = [m.get("name", "") for m in r.json().get("models", [])]
+        return jsonify({"models": models})
+    except Exception as e:
+        return jsonify({"models": [], "error": str(e)}), 502
+
+
+@app.route("/api/settings", methods=["GET", "POST"])
+def api_settings():
+    if request.method == "POST":
+        data = request.get_json(force=True) or {}
+        settings = load_settings()
+        settings.update(data)
+        save_settings(settings)
+        return jsonify({"ok": True, "settings": settings})
+    return jsonify(load_settings())
+
+
+@app.route("/api/chats", methods=["GET"])
+def api_chats():
+    return jsonify({"chats": list_chats()})
+
+
+@app.route("/api/chats/new", methods=["POST"])
+def api_new_chat():
+    data = request.get_json(force=True) or {}
+    subject = data.get("subject", "physics")
+    model = data.get("model", load_settings().get("model", STEM_MODEL))
+    title = data.get("title")
+    chat = new_chat(subject=subject, model=model, title=title)
+    return jsonify({"ok": True, "chat": chat})
+
+
+@app.route("/api/chats/<chat_id>", methods=["GET", "DELETE", "PUT"])
+def api_chat_detail(chat_id):
+    if request.method == "DELETE":
+        p = chat_path(chat_id)
+        if p.exists():
+            p.unlink()
+        return jsonify({"ok": True})
+    if request.method == "PUT":
+        data = request.get_json(force=True) or {}
+        chat = load_chat(chat_id)
+        if not chat:
+            return jsonify({"error": "not found"}), 404
+        if "title" in data:
+            chat["title"] = data["title"]
+        if "subject" in data:
+            chat["subject"] = data["subject"]
+        if "model" in data:
+            chat["model"] = data["model"]
+        save_chat(chat)
+        return jsonify({"ok": True, "chat": chat})
+    chat = load_chat(chat_id)
+    if not chat:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"ok": True, "chat": chat})
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -222,10 +432,29 @@ def api_chat():
     message = (data.get("message") or "").strip()
     subject = data.get("subject", "physics")
     use_notes = bool(data.get("use_notes"))
+    model = data.get("model") or load_settings().get("model", STEM_MODEL)
+    temperature = float(data.get("temperature", load_settings().get("temperature", 0.4)))
+    max_tokens = int(data.get("max_tokens", load_settings().get("max_tokens", 700)))
+    chat_id = data.get("chat_id")
+    stream = bool(data.get("stream", load_settings().get("stream", True)))
+
     if not message:
         return jsonify({"error": "empty message"}), 400
     if subject not in SUBJECTS:
         subject = "physics"
+
+    # Load or create chat session
+    if chat_id:
+        chat = load_chat(chat_id)
+        if not chat:
+            chat = new_chat(subject=subject, model=model)
+    else:
+        chat = new_chat(subject=subject, model=model)
+        chat_id = chat["id"]
+
+    # Append user message
+    user_msg = {"role": "user", "content": message}
+    chat["messages"].append(user_msg)
 
     context = ""
     if use_notes:
@@ -245,25 +474,57 @@ def api_chat():
         )
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT
+        {"role": "system", "content": SUBJECT_SYSTEM_PROMPTS[subject]
          + f"\n\nThe student selected the subject: {SUBJECTS[subject]}. Focus on that subject."},
-        {"role": "user", "content": user_content},
     ]
+    # Include recent conversation history (last 10 messages) for context
+    recent = chat["messages"][-11:]
+    for m in recent:
+        if m.get("role") in ("user", "assistant"):
+            messages.append({"role": m["role"], "content": m["content"]})
+    # Replace the last user message with the context-enriched one
+    messages[-1] = {"role": "user", "content": user_content}
 
     try:
-        reply = ollama_chat(STEM_MODEL, messages)
+        if stream:
+            def generate():
+                full = ""
+                try:
+                    for chunk in ollama_chat_stream(model, messages, temperature, max_tokens):
+                        full += chunk
+                        yield f"data: {json.dumps({{'chunk': chunk}})}\n\n"
+                    # Save assistant message after stream completes
+                    assistant_msg = {"role": "assistant", "content": full}
+                    chat["messages"].append(assistant_msg)
+                    save_chat(chat)
+                    yield f"data: {json.dumps({{'done': True, 'chat_id': chat_id}})}\n\n"
+                except requests.ConnectionError:
+                    yield f"data: {json.dumps({{'error': 'Ollama is not running. Start it with: ollama serve'}})}\n\n"
+                except requests.HTTPError as e:
+                    yield f"data: {json.dumps({{'error': f'Ollama error: {e}'}})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({{'error': str(e)}})}\n\n"
+
+            from flask import Response
+            return Response(generate(), mimetype="text/event-stream")
+        else:
+            r = ollama_chat(model, messages, temperature, max_tokens, stream=False)
+            data = r.json()
+            reply = _extract_text(data.get("message", {}))
+            assistant_msg = {"role": "assistant", "content": reply}
+            chat["messages"].append(assistant_msg)
+            save_chat(chat)
+            return jsonify({"reply": reply, "subject": subject, "chat_id": chat_id, "chat": chat})
     except requests.ConnectionError:
         return jsonify({
             "error": "Ollama is not running. Start it in another terminal with: ollama serve"
         }), 502
     except requests.HTTPError as e:
         return jsonify({
-            "error": f"Ollama error: {e}. Is the model '{STEM_MODEL}' downloaded? Try: ollama pull {STEM_MODEL}"
+            "error": f"Ollama error: {e}. Is the model '{model}' downloaded? Try: ollama pull {model}"
         }), 502
     except Exception as e:
         return jsonify({"error": str(e)}), 502
-
-    return jsonify({"reply": reply, "subject": subject})
 
 
 @app.route("/api/chat/stream", methods=["POST"])
