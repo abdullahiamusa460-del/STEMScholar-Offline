@@ -353,6 +353,71 @@ def status():
         })
 
 
+
+
+@app.route("/api/models")
+def api_models():
+    """Return available Ollama models."""
+    try:
+        r = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
+        models = [m.get("name", "") for m in r.json().get("models", [])]
+        return jsonify({"models": models})
+    except Exception as e:
+        return jsonify({"models": [], "error": str(e)}), 502
+
+
+@app.route("/api/settings", methods=["GET", "POST"])
+def api_settings():
+    if request.method == "POST":
+        data = request.get_json(force=True) or {}
+        settings = load_settings()
+        settings.update(data)
+        save_settings(settings)
+        return jsonify({"ok": True, "settings": settings})
+    return jsonify(load_settings())
+
+
+@app.route("/api/chats", methods=["GET"])
+def api_chats():
+    return jsonify({"chats": list_chats()})
+
+
+@app.route("/api/chats/new", methods=["POST"])
+def api_new_chat():
+    data = request.get_json(force=True) or {}
+    subject = data.get("subject", "physics")
+    model = data.get("model", load_settings().get("model", STEM_MODEL))
+    title = data.get("title")
+    chat = new_chat(subject=subject, model=model, title=title)
+    return jsonify({"ok": True, "chat": chat})
+
+
+@app.route("/api/chats/<chat_id>", methods=["GET", "DELETE", "PUT"])
+def api_chat_detail(chat_id):
+    if request.method == "DELETE":
+        p = chat_path(chat_id)
+        if p.exists():
+            p.unlink()
+        return jsonify({"ok": True})
+    if request.method == "PUT":
+        data = request.get_json(force=True) or {}
+        chat = load_chat(chat_id)
+        if not chat:
+            return jsonify({"error": "not found"}), 404
+        if "title" in data:
+            chat["title"] = data["title"]
+        if "subject" in data:
+            chat["subject"] = data["subject"]
+        if "model" in data:
+            chat["model"] = data["model"]
+        save_chat(chat)
+        return jsonify({"ok": True, "chat": chat})
+    chat = load_chat(chat_id)
+    if not chat:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"ok": True, "chat": chat})
+
+
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     data = request.get_json(force=True) or {}
