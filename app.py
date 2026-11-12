@@ -424,10 +424,29 @@ def api_chat():
     message = (data.get("message") or "").strip()
     subject = data.get("subject", "physics")
     use_notes = bool(data.get("use_notes"))
+    model = data.get("model") or load_settings().get("model", STEM_MODEL)
+    temperature = float(data.get("temperature", load_settings().get("temperature", 0.4)))
+    max_tokens = int(data.get("max_tokens", load_settings().get("max_tokens", 700)))
+    chat_id = data.get("chat_id")
+    stream = bool(data.get("stream", load_settings().get("stream", True)))
+
     if not message:
         return jsonify({"error": "empty message"}), 400
     if subject not in SUBJECTS:
         subject = "physics"
+
+    # Load or create chat session
+    if chat_id:
+        chat = load_chat(chat_id)
+        if not chat:
+            chat = new_chat(subject=subject, model=model)
+    else:
+        chat = new_chat(subject=subject, model=model)
+        chat_id = chat["id"]
+
+    # Append user message
+    user_msg = {"role": "user", "content": message}
+    chat["messages"].append(user_msg)
 
     context = ""
     if use_notes:
@@ -447,25 +466,57 @@ def api_chat():
         )
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT
+        {"role": "system", "content": SUBJECT_SYSTEM_PROMPTS[subject]
          + f"\n\nThe student selected the subject: {SUBJECTS[subject]}. Focus on that subject."},
-        {"role": "user", "content": user_content},
     ]
+    # Include recent conversation history (last 10 messages) for context
+    recent = chat["messages"][-11:]
+    for m in recent:
+        if m.get("role") in ("user", "assistant"):
+            messages.append({"role": m["role"], "content": m["content"]})
+    # Replace the last user message with the context-enriched one
+    messages[-1] = {"role": "user", "content": user_content}
 
     try:
-        reply = ollama_chat(STEM_MODEL, messages)
+        if stream:
+            def generate():
+                full = ""
+                try:
+                    for chunk in ollama_chat_stream(model, messages, temperature, max_tokens):
+                        full += chunk
+                        yield f"data: {json.dumps({{'chunk': chunk}})}\n\n"
+                    # Save assistant message after stream completes
+                    assistant_msg = {"role": "assistant", "content": full}
+                    chat["messages"].append(assistant_msg)
+                    save_chat(chat)
+                    yield f"data: {json.dumps({{'done': True, 'chat_id': chat_id}})}\n\n"
+                except requests.ConnectionError:
+                    yield f"data: {json.dumps({{'error': 'Ollama is not running. Start it with: ollama serve'}})}\n\n"
+                except requests.HTTPError as e:
+                    yield f"data: {json.dumps({{'error': f'Ollama error: {e}'}})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({{'error': str(e)}})}\n\n"
+
+            from flask import Response
+            return Response(generate(), mimetype="text/event-stream")
+        else:
+            r = ollama_chat(model, messages, temperature, max_tokens, stream=False)
+            data = r.json()
+            reply = _extract_text(data.get("message", {}))
+            assistant_msg = {"role": "assistant", "content": reply}
+            chat["messages"].append(assistant_msg)
+            save_chat(chat)
+            return jsonify({"reply": reply, "subject": subject, "chat_id": chat_id, "chat": chat})
     except requests.ConnectionError:
         return jsonify({
             "error": "Ollama is not running. Start it in another terminal with: ollama serve"
         }), 502
     except requests.HTTPError as e:
         return jsonify({
-            "error": f"Ollama error: {e}. Is the model '{STEM_MODEL}' downloaded? Try: ollama pull {STEM_MODEL}"
+            "error": f"Ollama error: {e}. Is the model '{model}' downloaded? Try: ollama pull {model}"
         }), 502
     except Exception as e:
         return jsonify({"error": str(e)}), 502
-
-    return jsonify({"reply": reply, "subject": subject})
 
 
 @app.route("/api/chat/stream", methods=["POST"])
