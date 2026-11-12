@@ -549,6 +549,13 @@ window.deleteNote = async (name) => {
   }
 };
 
+// Auto-load notes on settings panel open (refresh note list)
+document.addEventListener("click", (e) => {
+  if (e.target && e.target.id === "btnSettings") {
+    loadNotes();
+  }
+});
+
 // ---------- Settings ----------
 
 function applySettings(s) {
