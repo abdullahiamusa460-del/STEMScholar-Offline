@@ -3,6 +3,7 @@ import json
 import math
 import uuid
 import datetime
+import time
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_from_directory
 import requests
@@ -486,13 +487,20 @@ def api_chat():
         if stream:
             def generate():
                 full = ""
+                last_yield = time.time()
                 try:
                     for chunk in ollama_chat_stream(
                         model, messages, temperature, top_p, top_k,
                         repeat_penalty, max_tokens
                     ):
-                        full += chunk
-                        yield "data: " + json.dumps({"chunk": chunk}) + "\n\n"
+                        if chunk:
+                            full += chunk
+                            yield "data: " + json.dumps({"chunk": chunk}) + "\n\n"
+                            last_yield = time.time()
+                        # Keep-alive ping every 5 seconds during thinking phase
+                        elif time.time() - last_yield > 5:
+                            yield ": keep-alive\n\n"
+                            last_yield = time.time()
                     assistant_msg = {
                         "role": "assistant",
                         "content": full,
