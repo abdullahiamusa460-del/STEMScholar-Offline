@@ -449,7 +449,9 @@ async function loadChats() {
   try {
     const res = await fetch(`${API}/api/chats`);
     const data = await res.json();
-    renderChatList(data.chats || []);
+    // Limit to last 8 conversations to reduce clutter
+    const chats = (data.chats || []).slice(0, 8);
+    renderChatList(chats);
   } catch (err) {
     chatList.innerHTML = `<div class="empty">Could not load chats.</div>`;
   }
