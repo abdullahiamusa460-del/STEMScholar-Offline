@@ -1,4 +1,6 @@
-/* ============ STEMScholar Offline AI — Frontend ============ */
+/* ============ STEMScholar Offline AI — Frontend ============
+   Features: streaming chat, markdown rendering, settings,
+   chat history, notes management, dark/light themes ============ */
 const API = "";
 let currentSubject = "physics";
 let useNotes = false;
@@ -781,4 +783,5 @@ async function boot() {
   setInterval(updateStatus, 15000);
 }
 
+// Initialize app
 boot();
