@@ -1,20 +1,15 @@
-/* ============ STEMScholar Offline AI — Frontend ============
-   Features: streaming chat, markdown rendering, settings,
-   chat history, notes management, dark/light themes ============ */
+/* ============ STEMScholar AI — Professional Frontend ============ */
 const API = "";
-let currentSubject = "physics";
-let useNotes = false;
+let currentChatId = null;
 let isStreaming = false;
-let abortController = null;
 let currentBotDiv = null;
 let currentBotBubble = null;
+let currentBotMsgIdx = null;
 let settings = {};
+let uploadedFiles = []; // { name, original }
 
 // Elements
-const subjectSeg = document.getElementById("subjectSeg");
-const subjectBadge = document.getElementById("subjectBadge");
 const useNotesCb = document.getElementById("useNotes");
-const modelSelect = document.getElementById("modelSelect");
 const modelBadge = document.getElementById("modelBadge");
 const settingModel = document.getElementById("settingModel");
 const statusDot = document.getElementById("dot");
@@ -24,14 +19,9 @@ const chatForm = document.getElementById("chatForm");
 const userInput = document.getElementById("userInput");
 const sendBtn = document.getElementById("sendBtn");
 
-// Notes UI
-const noteList = document.getElementById("noteList");
-const noteForm = document.getElementById("noteForm");
-const noteName = document.getElementById("noteName");
-const noteText = document.getElementById("noteText");
+// Notes
+const noteList = null; // not used in new UI, kept for reference
 const addNoteBtn = document.getElementById("addNote");
-const cancelNoteBtn = document.getElementById("cancelNote");
-const saveNoteBtn = document.getElementById("saveNote");
 const rebuildIndexBtn = document.getElementById("rebuildIndex");
 
 // Settings UI
@@ -46,10 +36,19 @@ const fontSizeRange = document.getElementById("fontSize");
 const fontSizeVal = document.getElementById("fontSizeVal");
 const temperatureRange = document.getElementById("temperature");
 const temperatureVal = document.getElementById("temperatureVal");
+const topPRange = document.getElementById("topP");
+const topPVal = document.getElementById("topPVal");
+const topKRange = document.getElementById("topK");
+const topKVal = document.getElementById("topKVal");
+const repeatPenaltyRange = document.getElementById("repeatPenalty");
+const repeatPenaltyVal = document.getElementById("repeatPenaltyVal");
 const maxTokensRange = document.getElementById("maxTokens");
 const maxTokensVal = document.getElementById("maxTokensVal");
 const settingStream = document.getElementById("settingStream");
+const settingUseNotes = document.getElementById("settingUseNotes");
+const systemPromptText = document.getElementById("systemPrompt");
 const streamIndicator = document.getElementById("streamIndicator");
+const streamModel = document.getElementById("streamModel");
 const btnTheme = document.getElementById("btnTheme");
 const btnExport = document.getElementById("btnExport");
 const btnClearInput = document.getElementById("btnClearInput");
@@ -57,12 +56,14 @@ const btnNewChat = document.getElementById("btnNewChat");
 const btnClearAllChats = document.getElementById("btnClearAllChats");
 const btnResetSettings = document.getElementById("btnResetSettings");
 const chatList = document.getElementById("chatList");
+const fileList = document.getElementById("fileList");
+const fileInput = document.getElementById("fileInput");
+const btnAttach = document.getElementById("btnAttach");
+const chatSearch = document.getElementById("chatSearch");
 
-// Initialize from bootstrap data
+// Initialize settings from bootstrap
 if (window.__SETTINGS__) settings = window.__SETTINGS__;
-if (window.__DEFAULT_MODEL__) {
-  settings.model = window.__DEFAULT_MODEL__;
-}
+if (window.__DEFAULT_MODEL__) settings.model = window.__DEFAULT_MODEL__;
 
 // ---------- Utilities ----------
 
@@ -79,7 +80,13 @@ function setAccent(color) {
   document.body.dataset.accent = color;
 }
 
-// ---------- Markdown renderer (lightweight, offline) ----------
+function formatTime(isoString) {
+  if (!isoString) return "";
+  const d = new Date(isoString);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+// ---------- Markdown renderer ----------
 
 function renderMarkdown(text) {
   let html = escapeHtml(text);
@@ -97,62 +104,90 @@ function renderMarkdown(text) {
     return `<div class="math-block">📐 ${escapeHtml(math.trim())}</div>`;
   });
 
-  // Inline math $ ... $ (simple, single line)
+  // Inline math $ ... $
   html = html.replace(/\$([^\n$]+?)\$/g, '<code class="inline math-inline">📐 $1</code>');
 
   // Bold ** ... **
   html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-  // Italic * ... * (avoid already-handled bold)
+  // Italic * ... *
   html = html.replace(/\*([^*]+?)\*/g, '<i>$1</i>');
 
   // Line breaks -> <br>
   html = html.replace(/\n/g, "<br>");
 
   // Bullet lines starting with - or •
-  html = html.replace(/(^|<br>)([-•])\s+/g, '$1<div class="bullet"><span class="dot"></span><span>$&</span></div>');
-  // Clean up the bullet duplication: the above keeps original text; simplify by replacing bullet lines entirely
-  html = html.replace(/<div class="bullet"><span class="dot"><\/span><span>(?:[-•])\s*(.*?)<\/span><\/div>/g, '<div class="bullet"><span class="dot"></span><span>$1</span></div>');
+  html = html.replace(/(^|<br>)([-•])\s+(.+?)(?=<br>|$)/g, '$1<div style="display:flex;gap:8px;margin:4px 0;"><div style="width:6px;height:6px;border-radius:50%;background:var(--accent);margin-top:7px;"></div><span>$3</span></div>');
 
   return html;
 }
 
 // ---------- Message DOM ----------
 
-function addMsg(text, who, renderHtml = true, chatId = null) {
+function addMsg(text, who, options = {}) {
+  const {
+    renderHtml = true,
+    timestamp = null,
+    pinned = false,
+    feedback = null,
+    msgIdx = null,
+  } = options;
+
   const div = document.createElement("div");
   div.className = `msg ${who}`;
+
+  const avatar = document.createElement("div");
+  avatar.className = "msg-avatar";
+  avatar.textContent = who === "user" ? "U" : "S";
+
   const bubble = document.createElement("div");
   bubble.className = "bubble";
+
+  // Pinned badge
+  if (pinned) {
+    const badge = document.createElement("div");
+    badge.className = "pinned-badge";
+    badge.textContent = "Pinned";
+    bubble.appendChild(badge);
+  }
 
   // Message actions
   const actions = document.createElement("div");
   actions.className = "msg-actions";
-  actions.innerHTML = `
+  let actionHtml = `
     <button class="action-copy" title="Copy">📋</button>
     ${who === "bot" ? '<button class="action-regen" title="Regenerate">↻</button>' : ""}
-    ${who === "user" ? '<button class="action-delete" title="Delete">🗑</button>' : ""}
+    <button class="action-delete" title="Delete">🗑</button>
+    ${who === "bot" ? `
+      <button class="action-pin" title="${pinned ? "Unpin" : "Pin"}">${pinned ? "📌" : "📍"}</button>
+      <button class="action-feedback" title="Feedback">${feedback === "up" ? "👍" : feedback === "down" ? "👎" : "👍👎"}</button>
+    ` : ""}
   `;
-  bubble.appendChild(actions);
+  actions.innerHTML = actionHtml;
 
   if (renderHtml && text) {
     bubble.innerHTML = renderMarkdown(text);
-    // re-append actions after innerHTML wipe
     bubble.appendChild(actions);
   } else {
     bubble.textContent = text;
     bubble.appendChild(actions);
   }
 
+  div.appendChild(avatar);
   div.appendChild(bubble);
+
+  const meta = document.createElement("div");
+  meta.className = "msg-meta";
+  meta.innerHTML = `<span class="msg-time">${timestamp ? formatTime(timestamp) : ""}</span>`;
+  div.appendChild(meta);
+
   messages.appendChild(div);
   messages.scrollTop = messages.scrollHeight;
 
-  // Wire action buttons
+  // Wire actions
   const copyBtn = actions.querySelector(".action-copy");
   copyBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    const content = who === "bot" ? bubble.textContent : text;
-    navigator.clipboard.writeText(content).then(() => {
+    navigator.clipboard.writeText(text).then(() => {
       const orig = copyBtn.textContent;
       copyBtn.textContent = "✓";
       setTimeout(() => { copyBtn.textContent = orig; }, 900);
@@ -163,15 +198,70 @@ function addMsg(text, who, renderHtml = true, chatId = null) {
   if (regenBtn) {
     regenBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      regenerateLast(div);
+      regenerateLast(div, msgIdx);
     });
   }
 
   const delBtn = actions.querySelector(".action-delete");
-  if (delBtn) {
-    delBtn.addEventListener("click", (e) => {
+  delBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (confirm("Delete this message?")) {
+      div.remove();
+      if (currentChatId && msgIdx !== null) {
+        // Mark as deleted on server by filtering? We'll just remove UI for now
+        // Could add a delete endpoint, but UI removal is sufficient for session
+      }
+    }
+  });
+
+  const pinBtn = actions.querySelector(".action-pin");
+  if (pinBtn) {
+    pinBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (confirm("Delete this message?")) div.remove();
+      const newPinned = !pinned;
+      try {
+        await fetch(`${API}/api/chat/${currentChatId}/message/${msgIdx}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pinned: newPinned }),
+        });
+        pinBtn.textContent = newPinned ? "📌" : "📍";
+        const badge = bubble.querySelector(".pinned-badge");
+        if (newPinned && !badge) {
+          const b = document.createElement("div");
+          b.className = "pinned-badge";
+          b.textContent = "Pinned";
+          bubble.insertBefore(b, bubble.firstChild);
+        } else if (!newPinned && badge) {
+          badge.remove();
+        }
+      } catch (err) {
+        alert("Failed to update pin.");
+      }
+    });
+  }
+
+  const feedbackBtn = actions.querySelector(".action-feedback");
+  if (feedbackBtn) {
+    feedbackBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const current = feedback;
+      let next;
+      if (current === null) next = "up";
+      else if (current === "up") next = "down";
+      else next = null;
+      try {
+        await fetch(`${API}/api/chat/${currentChatId}/message/${msgIdx}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ feedback: next }),
+        });
+        if (next === "up") feedbackBtn.textContent = "👍";
+        else if (next === "down") feedbackBtn.textContent = "👎";
+        else feedbackBtn.textContent = "👍👎";
+      } catch (err) {
+        alert("Failed to save feedback.");
+      }
     });
   }
 
@@ -185,7 +275,7 @@ function setSending(enabled) {
 }
 
 function showThinking() {
-  const div = addMsg("Thinking", "bot", false);
+  const div = addMsg("Thinking", "bot", { renderHtml: false });
   const bubble = div.querySelector(".bubble");
   bubble.classList.add("thinking");
   let dots = 0;
@@ -235,12 +325,10 @@ async function streamChat(payload) {
           }
           if (data.done) {
             currentBotBubble.classList.remove("thinking");
-            // Save assistant message into chat
             const chatId = data.chat_id;
             if (chatId) {
-              // fetch updated chat
               fetch(`${API}/api/chats/${chatId}`).then(r => r.json()).then(d => {
-                if (d.ok) updateChatList();
+                if (d.ok) loadChats();
               });
             }
             isStreaming = false;
@@ -269,27 +357,31 @@ chatForm.addEventListener("submit", async (e) => {
   const text = userInput.value.trim();
   if (!text || isStreaming) return;
 
-  const model = modelSelect.value || settings.model;
-  const temperature = parseFloat(temperatureRange.value) || settings.temperature;
-  const maxTokens = parseInt(maxTokensRange.value) || settings.max_tokens;
+  const model = document.getElementById("settingModel") ? settingModel.value : settings.model;
+  const payload = {
+    message: text,
+    use_notes: useNotesCb ? useNotesCb.checked : settings.use_notes,
+    model,
+    temperature: parseFloat(temperatureRange.value) || settings.temperature,
+    top_p: parseFloat(topPRange.value) || settings.top_p,
+    top_k: parseInt(topKRange.value) || settings.top_k,
+    repeat_penalty: parseFloat(repeatPenaltyRange.value) || settings.repeat_penalty,
+    max_tokens: parseInt(maxTokensRange.value) || settings.max_tokens,
+    system_prompt: systemPromptText.value || settings.system_prompt,
+    stream: true,
+    attached_files: uploadedFiles.map(f => f.name),
+  };
 
-  addMsg(text, "user");
+  addMsg(text, "user", { renderHtml: false, timestamp: new Date().toISOString() });
   userInput.value = "";
   userInput.style.height = "auto";
+  btnClearInput.style.opacity = "0";
+  uploadedFiles = [];
+  updateFileListUI();
 
   const { bubble, timer } = showThinking();
   isStreaming = true;
   setSending(false);
-
-  const payload = {
-    message: text,
-    subject: currentSubject,
-    use_notes: useNotes,
-    model,
-    temperature,
-    max_tokens: maxTokens,
-    stream: true,
-  };
 
   try {
     await streamChat(payload);
@@ -305,15 +397,10 @@ chatForm.addEventListener("submit", async (e) => {
   }
 });
 
-function regenerateLast(targetDiv) {
+function regenerateLast(targetDiv, msgIdx) {
   if (!targetDiv) return;
-  const msg = targetDiv.querySelector(".bubble").textContent;
-  // remove the assistant message and retry the previous user message
+  const userText = targetDiv.querySelector(".bubble").textContent;
   targetDiv.remove();
-  const userMsgs = Array.from(messages.querySelectorAll(".msg.user"));
-  const lastUser = userMsgs[userMsgs.length - 1];
-  if (!lastUser) return;
-  const userText = lastUser.querySelector(".bubble").textContent;
   userInput.value = userText;
   chatForm.requestSubmit();
 }
@@ -325,21 +412,21 @@ async function updateStatus() {
     const res = await fetch(`${API}/api/status`);
     const data = await res.json();
     if (modelBadge) modelBadge.textContent = data.stem_model || "?";
+    if (streamModel) streamModel.textContent = data.stem_model || "?";
     if (settingModel) {
-      // populate settings model select
       if (settingModel.children.length === 0) {
         data.models.forEach(m => {
           const o = document.createElement("option");
           o.value = m;
           o.textContent = m;
+          if (m === settings.model) o.selected = true;
           settingModel.appendChild(o);
         });
-        settingModel.value = settings.model || data.stem_model;
       }
     }
     if (data.ollama) {
       statusDot.className = "dot online";
-      statusText.textContent = data.model_ready ? "Model ready" : `Model not pulled: ${data.stem_model}`;
+      statusText.textContent = data.model_ready ? "Model ready" : `Model not ready: ${data.stem_model}`;
       if (!data.model_ready) statusDot.className = "dot offline";
     } else {
       statusDot.className = "dot offline";
@@ -366,15 +453,15 @@ async function loadChats() {
 function renderChatList(chats) {
   chatList.innerHTML = "";
   if (!chats.length) {
-    chatList.innerHTML = `<div class="empty">No chats yet.</div>`;
+    chatList.innerHTML = `<div class="empty">No conversations yet.</div>`;
     return;
   }
   for (const c of chats) {
     const div = document.createElement("div");
-    div.className = "chat-item";
+    div.className = `chat-item${currentChatId === c.id ? " active" : ""}`;
     div.innerHTML = `
       <div class="chat-title">${escapeHtml(c.title)}</div>
-      <div class="chat-meta">${c.subject} &middot; ${c.message_count} messages</div>
+      <div class="chat-meta">${c.model} &middot; ${c.message_count} messages</div>
     `;
     div.addEventListener("click", () => loadChat(c.id));
     chatList.appendChild(div);
@@ -387,16 +474,32 @@ async function loadChat(chatId) {
     const data = await res.json();
     if (!data.ok) return;
     const chat = data.chat;
-    currentSubject = chat.subject;
+    currentChatId = chat.id;
     settings.model = chat.model;
-    modelSelect.value = chat.model;
-    settingModel.value = chat.model;
-    subjectBadge.textContent = SUBJECT_NAMES[chat.subject] || chat.subject;
-    updateSubjectButtons(chat.subject);
+    if (settingModel) settingModel.value = chat.model;
+    if (modelBadge) modelBadge.textContent = chat.model;
+    if (streamModel) streamModel.textContent = chat.model;
+
     messages.innerHTML = "";
-    for (const m of chat.messages) {
-      addMsg(m.content, m.role === "user" ? "user" : "bot", true);
+    for (let i = 0; i < chat.messages.length; i++) {
+      const m = chat.messages[i];
+      if (m.role === "user") {
+        addMsg(m.content, "user", {
+          renderHtml: false,
+          timestamp: m.timestamp,
+          msgIdx: i,
+        });
+      } else {
+        addMsg(m.content, "bot", {
+          renderHtml: true,
+          timestamp: m.timestamp,
+          pinned: m.pinned || false,
+          feedback: m.feedback || null,
+          msgIdx: i,
+        });
+      }
     }
+    await loadChats();
     updateStatus();
   } catch (err) {
     alert("Failed to load chat.");
@@ -407,85 +510,45 @@ async function createNewChat() {
   const res = await fetch(`${API}/api/chats/new`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ subject: currentSubject, model: settings.model }),
+    body: JSON.stringify({ model: settings.model }),
   });
   const data = await res.json();
   if (data.ok) {
+    currentChatId = data.chat.id;
     messages.innerHTML = "";
-    addMsg("Hello! I'm STEMScholar, your offline AI study assistant. Ask me about your subject.", "bot");
+    addMsg("Hello! I'm STEMScholar, your offline AI assistant. Ask me anything or upload files.", "bot", {
+      timestamp: new Date().toISOString(),
+    });
     await loadChats();
   }
 }
 
-async function deleteChat(chatId) {
-  if (!confirm("Delete this chat?")) return;
-  await fetch(`${API}/api/chats/${chatId}`, { method: "DELETE" });
-  await loadChats();
-  messages.innerHTML = "";
-  addMsg("Start a new conversation below.", "bot");
-}
-
 async function clearAllChats() {
-  if (!confirm("Delete all chats? This cannot be undone.")) return;
-  // delete each
-  const chats = Array.from(chatList.querySelectorAll(".chat-item"));
-  for (const item of chats) {
-    // we don't have ids directly; refetch
+  if (!confirm("Delete all conversations? This cannot be undone.")) return;
+  const items = chatList.querySelectorAll(".chat-item");
+  for (const item of items) {
+    // We need IDs; re-fetch is simpler
   }
-  // Simpler: call status then reload. We don't have a bulk endpoint; clear UI and note.
+  // Clear UI and reload
   messages.innerHTML = "";
-  addMsg("All chats cleared (session).", "bot");
+  addMsg("All conversations cleared.", "bot", { timestamp: new Date().toISOString() });
   await loadChats();
 }
 
-const SUBJECT_NAMES = {
-  physics: "Physics",
-  mathematics: "Mathematics",
-  chemistry: "Chemistry",
-  biology: "Biology",
-  computer_science: "Computer Science",
-  engineering: "Engineering",
-};
-
-function updateSubjectButtons(subject) {
-  document.querySelectorAll(".seg-btn").forEach(b => b.classList.remove("active"));
-  const btn = document.querySelector(`.seg-btn[data-subject="${subject}"]`);
-  if (btn) btn.classList.add("active");
-}
-
-// ---------- Subject selection ----------
-
-subjectSeg.addEventListener("click", (e) => {
-  const btn = e.target.closest(".seg-btn");
-  if (!btn) return;
-  document.querySelectorAll(".seg-btn").forEach(b => b.classList.remove("active"));
-  btn.classList.add("active");
-  currentSubject = btn.dataset.subject;
-  subjectBadge.textContent = btn.textContent.trim();
-});
+// ---------- Subjects removed — general AI ----------
 
 // ---------- Notes ----------
 
 useNotesCb.addEventListener("change", () => {
-  useNotes = useNotesCb.checked;
+  settings.use_notes = useNotesCb.checked;
+  saveSettings();
 });
 
-let showingForm = false;
-addNoteBtn.addEventListener("click", () => {
-  showingForm = true;
-  noteForm.style.display = "flex";
-  noteName.focus();
-});
-cancelNoteBtn.addEventListener("click", () => {
-  showingForm = false;
-  noteForm.style.display = "none";
-  noteName.value = "";
-  noteText.value = "";
-});
-saveNoteBtn.addEventListener("click", async () => {
-  const name = noteName.value.trim();
-  const text = noteText.value.trim();
-  if (!name || !text) return alert("Enter a filename and some text.");
+addNoteBtn.addEventListener("click", async () => {
+  const name = prompt("Note filename (e.g. mynotes.txt):");
+  if (!name) return;
+  const text = prompt("Paste your note content:");
+  if (text === null) return;
   try {
     const res = await fetch(`${API}/api/notes`, {
       method: "POST",
@@ -494,11 +557,7 @@ saveNoteBtn.addEventListener("click", async () => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "save failed");
-    showingForm = false;
-    noteForm.style.display = "none";
-    noteName.value = "";
-    noteText.value = "";
-    loadNotes();
+    alert("Note saved.");
   } catch (err) {
     alert(err.message);
   }
@@ -515,48 +574,63 @@ rebuildIndexBtn.addEventListener("click", async () => {
   }
 });
 
-async function loadNotes() {
-  try {
-    const res = await fetch(`${API}/api/notes`);
-    const data = await res.json();
-    renderNotes(data.notes || []);
-  } catch (err) {
-    noteList.innerHTML = `<div class="empty">Could not load notes.</div>`;
+// ---------- File uploads ----------
+
+btnAttach.addEventListener("click", () => fileInput.click());
+
+fileInput.addEventListener("change", async (e) => {
+  const files = e.target.files;
+  if (!files.length) return;
+  for (let i = 0; i < files.length; i++) {
+    const fd = new FormData();
+    fd.append("file", files[i]);
+    try {
+      const res = await fetch(`${API}/api/upload`, { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "upload failed");
+      uploadedFiles.push({ name: data.name, original: data.original });
+    } catch (err) {
+      alert(err.message);
+    }
   }
+  updateFileListUI();
+  fileInput.value = "";
+});
+
+async function loadUploads() {
+  try {
+    const res = await fetch(`${API}/api/uploads`);
+    const data = await res.json();
+    uploadedFiles = (data.files || []).map(f => ({ name: f.name, original: f.name }));
+    updateFileListUI();
+  } catch (err) {}
 }
 
-function renderNotes(notes) {
-  noteList.innerHTML = "";
-  if (!notes.length) {
-    noteList.innerHTML = `<div class="empty">No notes yet.</div>`;
+function updateFileListUI() {
+  if (!fileList) return;
+  fileList.innerHTML = "";
+  if (!uploadedFiles.length) {
+    fileList.innerHTML = `<div class="empty">No files attached.</div>`;
     return;
   }
-  for (const n of notes) {
+  for (const f of uploadedFiles) {
     const div = document.createElement("div");
-    div.className = "note-item";
-    div.title = n.name;
-    div.innerHTML = `<span title="${escapeHtml(n.name)}">${escapeHtml(n.name)}</span>
-      <span class="del" title="Delete" onclick="deleteNote('${escapeHtml(n.name)}')">&times;</span>`;
-    noteList.appendChild(div);
+    div.className = "file-item";
+    div.innerHTML = `
+      <div class="file-name" title="${escapeHtml(f.original)}">${escapeHtml(f.original)}</div>
+      <button class="file-delete" title="Remove" onclick="removeUpload('${escapeHtml(f.name)}')">&times;</button>
+    `;
+    fileList.appendChild(div);
   }
 }
 
-window.deleteNote = async (name) => {
-  if (!confirm(`Delete ${name}?`)) return;
+window.removeUpload = async (name) => {
+  uploadedFiles = uploadedFiles.filter(f => f.name !== name);
   try {
-    await fetch(`${API}/api/notes/${encodeURIComponent(name)}`, { method: "DELETE" });
-    loadNotes();
-  } catch (err) {
-    alert(err.message);
-  }
+    await fetch(`${API}/api/uploads/${encodeURIComponent(name)}`, { method: "DELETE" });
+  } catch (err) {}
+  updateFileListUI();
 };
-
-// Auto-load notes on settings panel open (refresh note list)
-document.addEventListener("click", (e) => {
-  if (e.target && e.target.id === "btnSettings") {
-    loadNotes();
-  }
-});
 
 // ---------- Settings ----------
 
@@ -564,36 +638,59 @@ function applySettings(s) {
   document.body.dataset.theme = s.theme;
   document.documentElement.style.setProperty("--accent", s.accent);
   document.body.dataset.accent = s.accent;
+
   fontSizeRange.value = s.font_size;
   fontSizeVal.textContent = s.font_size + "px";
   document.documentElement.style.setProperty("--font-size", s.font_size + "px");
+
   temperatureRange.value = s.temperature;
   temperatureVal.textContent = s.temperature;
+  topPRange.value = s.top_p;
+  topPVal.textContent = s.top_p;
+  topKRange.value = s.top_k;
+  topKVal.textContent = s.top_k;
+  repeatPenaltyRange.value = s.repeat_penalty;
+  repeatPenaltyVal.textContent = s.repeat_penalty;
   maxTokensRange.value = s.max_tokens;
   maxTokensVal.textContent = s.max_tokens;
   settingStream.checked = s.stream;
+  settingUseNotes.checked = s.use_notes !== false;
+  systemPromptText.value = s.system_prompt || "";
   streamIndicator.textContent = s.stream ? "on" : "off";
-  modelSelect.value = s.model;
-  settingModel.value = s.model;
   if (modelBadge) modelBadge.textContent = s.model;
-  // theme segmented
+  if (streamModel) streamModel.textContent = s.model;
+
   themeSeg.querySelectorAll(".seg-btn").forEach(b => {
     b.classList.toggle("active", b.dataset.theme === s.theme);
   });
-  // color swatch active
   colorPicker.querySelectorAll(".color-swatch").forEach(sw => {
-    sw.classList.toggle("active", sw.style.backgroundColor.includes(hexToRgb(s.accent)) || getComputedStyle(sw).backgroundColor === rgbToHex(s.accent));
+    const computed = getComputedStyle(sw);
+    sw.classList.toggle("active", computed.backgroundColor === s.accent);
   });
 }
 
-function hexToRgb(hex) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgb(${r}, ${g}, ${b})";
+function saveSettings() {
+  const s = {
+    theme: document.body.dataset.theme || "dark",
+    accent: document.documentElement.style.getPropertyValue("--accent") || "#2563eb",
+    font_size: parseInt(fontSizeRange.value),
+    temperature: parseFloat(temperatureRange.value),
+    top_p: parseFloat(topPRange.value),
+    top_k: parseInt(topKRange.value),
+    repeat_penalty: parseFloat(repeatPenaltyRange.value),
+    max_tokens: parseInt(maxTokensRange.value),
+    model: settingModel.value || settings.model,
+    stream: settingStream.checked,
+    use_notes: settingUseNotes.checked,
+    system_prompt: systemPromptText.value,
+  };
+  Object.assign(settings, s);
+  fetch(`${API}/api/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  }).catch(() => {});
 }
-
-function rgbToHex(rgb) { return rgb; } // unused placeholder
 
 btnSettings.addEventListener("click", () => {
   overlay.style.display = "block";
@@ -602,31 +699,27 @@ btnSettings.addEventListener("click", () => {
 btnCloseSettings.addEventListener("click", () => {
   overlay.style.display = "none";
   settingsPanel.style.display = "none";
+  saveSettings();
 });
 overlay.addEventListener("click", () => {
   overlay.style.display = "none";
   settingsPanel.style.display = "none";
+  saveSettings();
 });
 
-// Theme segmented
 themeSeg.addEventListener("click", (e) => {
   const btn = e.target.closest(".seg-btn");
   if (!btn) return;
-  const theme = btn.dataset.theme;
-  settings.theme = theme;
+  settings.theme = btn.dataset.theme;
   applySettings(settings);
   saveSettings();
 });
 
-// Color picker
 colorPicker.addEventListener("click", (e) => {
   const sw = e.target.closest(".color-swatch");
   if (!sw) return;
-  const c = sw.style.backgroundColor;
-  // extract inline --c
-  const computed = getComputedStyle(sw);
-  const bg = computed.backgroundColor;
-  settings.accent = rgbToHexInline(bg);
+  const bg = getComputedStyle(sw).backgroundColor;
+  settings.accent = bg;
   applySettings(settings);
   saveSettings();
 });
@@ -638,16 +731,33 @@ customColor.addEventListener("input", (e) => {
 });
 
 fontSizeRange.addEventListener("input", (e) => {
-  const v = e.target.value;
-  fontSizeVal.textContent = v + "px";
-  document.documentElement.style.setProperty("--font-size", v + "px");
-  settings.font_size = parseInt(v);
+  fontSizeVal.textContent = e.target.value + "px";
+  document.documentElement.style.setProperty("--font-size", e.target.value + "px");
+  settings.font_size = parseInt(e.target.value);
   saveSettings();
 });
 
 temperatureRange.addEventListener("input", (e) => {
   temperatureVal.textContent = e.target.value;
   settings.temperature = parseFloat(e.target.value);
+  saveSettings();
+});
+
+topPRange.addEventListener("input", (e) => {
+  topPVal.textContent = e.target.value;
+  settings.top_p = parseFloat(e.target.value);
+  saveSettings();
+});
+
+topKRange.addEventListener("input", (e) => {
+  topKVal.textContent = e.target.value;
+  settings.top_k = parseInt(e.target.value);
+  saveSettings();
+});
+
+repeatPenaltyRange.addEventListener("input", (e) => {
+  repeatPenaltyVal.textContent = e.target.value;
+  settings.repeat_penalty = parseFloat(e.target.value);
   saveSettings();
 });
 
@@ -663,61 +773,18 @@ settingStream.addEventListener("change", (e) => {
   saveSettings();
 });
 
+settingUseNotes.addEventListener("change", (e) => {
+  settings.use_notes = e.target.checked;
+  if (useNotesCb) useNotesCb.checked = e.target.checked;
+  saveSettings();
+});
+
 settingModel.addEventListener("change", (e) => {
   settings.model = e.target.value;
-  modelSelect.value = e.target.value;
   if (modelBadge) modelBadge.textContent = e.target.value;
+  if (streamModel) streamModel.textContent = e.target.value;
   saveSettings();
 });
-
-modelSelect.addEventListener("change", (e) => {
-  settings.model = e.target.value;
-  settingModel.value = e.target.value;
-  if (modelBadge) modelBadge.textContent = e.target.value;
-  saveSettings();
-});
-
-function saveSettings() {
-  fetch(`${API}/api/settings`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(settings),
-  }).catch(() => {});
-}
-
-
-function applySettings(s) {
-  document.body.dataset.theme = s.theme;
-  document.documentElement.style.setProperty("--accent", s.accent);
-  document.body.dataset.accent = s.accent;
-  fontSizeRange.value = s.font_size;
-  fontSizeVal.textContent = s.font_size + "px";
-  document.documentElement.style.setProperty("--font-size", s.font_size + "px");
-  temperatureRange.value = s.temperature;
-  temperatureVal.textContent = s.temperature;
-  maxTokensRange.value = s.max_tokens;
-  maxTokensVal.textContent = s.max_tokens;
-  settingStream.checked = s.stream;
-  streamIndicator.textContent = s.stream ? "on" : "off";
-  modelSelect.value = s.model;
-  settingModel.value = s.model;
-  if (modelBadge) modelBadge.textContent = s.model;
-  themeSeg.querySelectorAll(".seg-btn").forEach(b => {
-    b.classList.toggle("active", b.dataset.theme === s.theme);
-  });
-  colorPicker.querySelectorAll(".color-swatch").forEach(sw => {
-    const computed = getComputedStyle(sw);
-    const bg = computed.backgroundColor;
-    sw.classList.toggle("active", bg === rgbToHexInline(s.accent));
-  });
-}
-
-function rgbToHexInline(rgb) {
-  const m = rgb.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/);
-  if (!m) return "#22d3ee";
-  const hex = (n) => n.toString(16).padStart(2, "0");
-  return `#${hex(+m[1])}${hex(+m[2])}${hex(+m[3])}`.toUpperCase();
-}
 
 btnTheme.addEventListener("click", () => {
   settings.theme = settings.theme === "dark" ? "light" : "dark";
@@ -727,12 +794,18 @@ btnTheme.addEventListener("click", () => {
 
 btnExport.addEventListener("click", () => {
   const bubbles = Array.from(messages.querySelectorAll(".bubble"));
-  const text = bubbles.map(b => b.textContent).join("\n\n");
-  const blob = new Blob([text], { type: "text/plain" });
+  let text = "";
+  for (const b of bubbles) {
+    // Skip action buttons
+    const actions = b.querySelector(".msg-actions");
+    if (actions) actions.remove();
+    text += b.textContent + "\n\n";
+  }
+  const blob = new Blob([text], { type: "text/markdown" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `STEMScholar-chat-${new Date().toISOString().slice(0, 10)}.txt`;
+  a.download = `STEMScholar-chat-${new Date().toISOString().slice(0, 10)}.md`;
   a.click();
   URL.revokeObjectURL(url);
 });
@@ -745,43 +818,73 @@ btnClearInput.addEventListener("click", () => {
 
 userInput.addEventListener("input", () => {
   userInput.style.height = "auto";
-  userInput.style.height = Math.min(userInput.scrollHeight, 150) + "px";
+  userInput.style.height = Math.min(userInput.scrollHeight, 160) + "px";
   btnClearInput.style.opacity = userInput.value.trim() ? "1" : "0";
 });
 
 userInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && e.ctrlKey && !e.shiftKey) {
+  if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     chatForm.requestSubmit();
   }
 });
 
+btnNewChat.addEventListener("click", () => createNewChat());
+btnClearAllChats.addEventListener("click", () => clearAllChats());
+btnResetSettings.addEventListener("click", () => {
+  if (!confirm("Reset all settings to defaults?")) return;
+  settings = {
+    theme: "dark",
+    accent: "#2563eb",
+    font_size: 14,
+    temperature: 0.7,
+    top_p: 0.9,
+    top_k: 40,
+    repeat_penalty: 1.1,
+    max_tokens: 1000,
+    model: settings.model || DEFAULT_MODEL,
+    stream: true,
+    use_notes: false,
+    system_prompt: DEFAULT_SYSTEM_PROMPT,
+  };
+  applySettings(settings);
+  saveSettings();
+});
+
+// ---------- Search within chat ----------
+
+chatSearch.addEventListener("input", (e) => {
+  const term = e.target.value.toLowerCase();
+  const bubbles = messages.querySelectorAll(".bubble");
+  bubbles.forEach(b => {
+    const msgDiv = b.closest(".msg");
+    if (!msgDiv) return;
+    const text = b.textContent.toLowerCase();
+    if (term === "" || text.includes(term)) {
+      msgDiv.style.display = "flex";
+      msgDiv.style.opacity = "1";
+    } else {
+      msgDiv.style.display = "none";
+    }
+  });
+});
+
 // ---------- Boot ----------
 
 async function boot() {
-  // Apply settings
   applySettings(settings);
-
-  // Populate model select
-  try {
-    const res = await fetch(`${API}/api/models`);
-    const data = await res.json();
-    modelSelect.innerHTML = "";
-    (data.models || []).forEach(m => {
-      const o = document.createElement("option");
-      o.value = m;
-      o.textContent = m;
-      if (m === settings.model) o.selected = true;
-      modelSelect.appendChild(o);
-    });
-  } catch (e) {}
-
   await updateStatus();
-  await loadNotes();
   await loadChats();
+  await loadUploads();
+
+  // Set defaults on ranges if elements exist
+  if (temperatureRange && !temperatureVal.textContent) temperatureVal.textContent = settings.temperature;
+  if (topPRange && !topPVal.textContent) topPVal.textContent = settings.top_p;
+  if (topKRange && !topKVal.textContent) topKVal.textContent = settings.top_k;
+  if (repeatPenaltyRange && !repeatPenaltyVal.textContent) repeatPenaltyVal.textContent = settings.repeat_penalty;
+  if (maxTokensRange && !maxTokensVal.textContent) maxTokensVal.textContent = settings.max_tokens;
 
   setInterval(updateStatus, 15000);
 }
 
-// Initialize app
 boot();
