@@ -1,6 +1,7 @@
 import os
 import json
 import math
+import uuid
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify
 import requests
@@ -8,6 +9,8 @@ import requests
 BASE_DIR = Path(__file__).resolve().parent
 NOTES_DIR = BASE_DIR / "notes"
 INDEX_FILE = BASE_DIR / "notes_index.json"
+CHATS_DIR = BASE_DIR / "chats"
+SETTINGS_FILE = BASE_DIR / "user_settings.json"
 
 # Load .env manually (no extra dependency)
 def load_env(path):
@@ -22,6 +25,37 @@ def load_env(path):
 
 load_env(BASE_DIR / ".env")
 
+
+def default_settings():
+    return {
+        "theme": "dark",
+        "accent": "#22d3ee",
+        "font_size": 14,
+        "temperature": 0.4,
+        "max_tokens": 700,
+        "model": STEM_MODEL,
+        "subject": "physics",
+        "use_notes": False,
+        "stream": True,
+    }
+
+
+def load_settings():
+    if SETTINGS_FILE.exists():
+        try:
+            s = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            d = default_settings()
+            for k, v in d.items():
+                s.setdefault(k, v)
+            return s
+        except Exception:
+            pass
+    return default_settings()
+
+
+def save_settings(settings):
+    SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 STEM_MODEL = os.environ.get("STEM_MODEL", "gemma4:e2b-it-qat")
 EMBED_MODEL = os.environ.get("STEM_EMBED_MODEL", "snowflake-arctic-embed:33m")
@@ -34,6 +68,7 @@ SUBJECTS = {
 
 app = Flask(__name__)
 NOTES_DIR.mkdir(exist_ok=True)
+CHATS_DIR.mkdir(exist_ok=True)
 
 SYSTEM_PROMPT = (
     "You are STEMScholar, an offline study assistant for secondary and university students. "
