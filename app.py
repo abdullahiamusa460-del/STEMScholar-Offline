@@ -330,25 +330,33 @@ def new_chat(subject="physics", model=STEM_MODEL, title=None):
 
 @app.route("/")
 def home():
-    return render_template("index.html", subjects=SUBJECTS, model=STEM_MODEL)
+    settings = load_settings()
+    return render_template(
+        "index.html",
+        subjects=SUBJECTS,
+        model=settings.get("model", STEM_MODEL),
+        settings=settings,
+    )
 
 
 @app.route("/api/status")
 def status():
+    settings = load_settings()
     try:
         r = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
         models = [m.get("name", "") for m in r.json().get("models", [])]
         return jsonify({
             "ollama": True,
             "models": models,
-            "stem_model": STEM_MODEL,
-            "model_ready": STEM_MODEL in models,
+            "stem_model": settings.get("model", STEM_MODEL),
+            "model_ready": settings.get("model", STEM_MODEL) in models,
         })
     except Exception:
+        settings = load_settings()
         return jsonify({
             "ollama": False,
             "models": [],
-            "stem_model": STEM_MODEL,
+            "stem_model": settings.get("model", STEM_MODEL),
             "model_ready": False,
         })
 
