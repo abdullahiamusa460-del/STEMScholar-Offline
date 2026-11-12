@@ -486,8 +486,10 @@ async function loadChat(chatId) {
     if (streamModel) streamModel.textContent = chat.model;
 
     messages.innerHTML = "";
-    for (let i = 0; i < chat.messages.length; i++) {
-      const m = chat.messages[i];
+    // Only show last 10 messages to reduce clutter
+    const recentMsgs = chat.messages.slice(-10);
+    for (let i = 0; i < recentMsgs.length; i++) {
+      const m = recentMsgs[i];
       if (m.role === "user") {
         addMsg(m.content, "user", {
           renderHtml: false,

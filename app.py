@@ -55,11 +55,11 @@ def default_settings():
         "theme": "dark",
         "accent": "#2563eb",
         "font_size": 14,
-        "temperature": 0.7,
+        "temperature": 0.5,
         "top_p": 0.9,
         "top_k": 40,
         "repeat_penalty": 1.1,
-        "max_tokens": 1000,
+        "max_tokens": 200,
         "model": DEFAULT_MODEL,
         "system_prompt": DEFAULT_SYSTEM_PROMPT,
         "stream": True,
@@ -480,7 +480,8 @@ def api_chat():
         user_content = system_prompt + "\n\n---\n\n" + user_content
 
     messages = []
-    recent = chat["messages"][-11:]
+    # Only send recent conversation history (last 4 messages) for speed
+    recent = chat["messages"][-4:]
     for m in recent:
         if m.get("role") in ("user", "assistant"):
             messages.append({"role": m["role"], "content": m.get("content", "")})
