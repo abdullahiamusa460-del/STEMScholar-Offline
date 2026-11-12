@@ -257,6 +257,65 @@ def search_notes(query, top_k=4):
     return results[:top_k]
 
 
+# ---------- Chat session helpers ----------
+
+def chat_path(chat_id):
+    return CHATS_DIR / f"{chat_id}.json"
+
+
+def list_chats():
+    chats = []
+    if CHATS_DIR.exists():
+        for f in sorted(CHATS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                chats.append({
+                    "id": data.get("id", f.stem),
+                    "title": data.get("title", "New chat"),
+                    "subject": data.get("subject", "physics"),
+                    "model": data.get("model", STEM_MODEL),
+                    "updated_at": data.get("updated_at", ""),
+                    "message_count": len(data.get("messages", [])),
+                })
+            except Exception:
+                continue
+    return chats
+
+
+def load_chat(chat_id):
+    p = chat_path(chat_id)
+    if p.exists():
+        return json.loads(p.read_text(encoding="utf-8"))
+    return None
+
+
+def save_chat(chat):
+    import datetime
+    chat["updated_at"] = chat.get("updated_at") or datetime.datetime.utcnow().isoformat()
+    if not chat.get("id"):
+        chat["id"] = str(uuid.uuid4())
+    if not chat.get("title"):
+        chat["title"] = "New chat"
+    chat_path(chat["id"]).write_text(json.dumps(chat, indent=2), encoding="utf-8")
+    return chat
+
+
+def new_chat(subject="physics", model=STEM_MODEL, title=None):
+    import datetime
+    now = datetime.datetime.utcnow().isoformat()
+    chat = {
+        "id": str(uuid.uuid4()),
+        "title": title or f"New {SUBJECTS.get(subject, subject)} chat",
+        "subject": subject,
+        "model": model,
+        "created_at": now,
+        "updated_at": now,
+        "messages": [],
+    }
+    save_chat(chat)
+    return chat
+
+
 @app.route("/")
 def home():
     return render_template("index.html", subjects=SUBJECTS, model=STEM_MODEL)
