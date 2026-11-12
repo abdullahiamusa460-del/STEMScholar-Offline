@@ -110,24 +110,36 @@ CHATS_DIR.mkdir(exist_ok=True)
 
 
 
-def ollama_chat(model, messages):
+def ollama_chat(model, messages, temperature=0.4, max_tokens=700, stream=False):
     url = f"{OLLAMA_HOST}/api/chat"
     payload = {
         "model": model,
         "messages": messages,
-        "stream": False,
+        "stream": stream,
         "options": {
-            "temperature": 0.4,
-            "num_predict": 700,      # allow longer answers
+            "temperature": temperature,
+            "num_predict": max_tokens,
         },
     }
-    # Long timeout: first message may load the model into RAM (can be slow offline)
-    r = requests.post(url, json=payload, timeout=600)
+    r = requests.post(url, json=payload, stream=stream, timeout=600)
     r.raise_for_status()
-    return r.json()["message"]["content"]
+    return r
 
 
-def ollama_chat_stream(model, messages):
+def _extract_text(msg):
+    """Extract text from an Ollama message, supporting both 'content' and 'thinking' fields."""
+    content = msg.get("content", "") or ""
+    thinking = msg.get("thinking", "") or ""
+    if thinking and not content:
+        return thinking
+    if content and not thinking:
+        return content
+    if thinking and content:
+        return thinking + "\n\n" + content
+    return content
+
+
+def ollama_chat_stream(model, messages, temperature=0.4, max_tokens=700):
     """Yield response chunks from Ollama streaming chat."""
     url = f"{OLLAMA_HOST}/api/chat"
     payload = {
@@ -135,8 +147,8 @@ def ollama_chat_stream(model, messages):
         "messages": messages,
         "stream": True,
         "options": {
-            "temperature": 0.4,
-            "num_predict": 700,      # allow longer answers
+            "temperature": temperature,
+            "num_predict": max_tokens,
         },
     }
     r = requests.post(url, json=payload, stream=True, timeout=600)
@@ -149,9 +161,9 @@ def ollama_chat_stream(model, messages):
         except json.JSONDecodeError:
             continue
         msg = data.get("message", {})
-        content = msg.get("content", "")
-        if content:
-            yield content
+        text = _extract_text(msg)
+        if text:
+            yield text
         if data.get("done"):
             break
 
