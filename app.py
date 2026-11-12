@@ -37,7 +37,8 @@ DEFAULT_SYSTEM_PROMPT = (
     "You can answer questions on any topic — science, mathematics, programming, "
     "writing, analysis, and general knowledge. Provide clear, accurate, and "
     "well-structured responses. Use step-by-step explanations when helpful. "
-    "You run entirely offline on the user's computer."
+    "You run entirely offline on the user's computer. "
+    "Answer directly and concisely. Do not show your internal reasoning or thinking process."
 )
 
 app = Flask(__name__)
@@ -468,7 +469,13 @@ def api_chat():
         except Exception:
             pass
 
-    messages = [{"role": "system", "content": system_prompt}]
+    # Prepend system instructions to user message instead of using system role,
+    # because gemma4 puts everything in 'thinking' when system role is used,
+    # leaving 'content' empty. This ensures users see the answer, not the logic.
+    if system_prompt:
+        user_content = system_prompt + "\n\n---\n\n" + user_content
+
+    messages = []
     recent = chat["messages"][-11:]
     for m in recent:
         if m.get("role") in ("user", "assistant"):
