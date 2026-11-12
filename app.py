@@ -29,7 +29,7 @@ def load_env(path):
 load_env(BASE_DIR / ".env")
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-DEFAULT_MODEL = os.environ.get("STEM_MODEL", "gemma4:e2b-it-qat")
+DEFAULT_MODEL = os.environ.get("STEM_MODEL", "gemma3:1b")
 EMBED_MODEL = os.environ.get("STEM_EMBED_MODEL", "snowflake-arctic-embed:33m")
 
 # Default system prompt — general AI assistant (no subject restriction)
@@ -341,13 +341,25 @@ def status():
             "models": models,
             "stem_model": stem_model,
             "model_ready": stem_model in models,
+            "ollama_installed": True,
         })
-    except Exception:
+    except requests.ConnectionError:
         return jsonify({
             "ollama": False,
             "models": [],
             "stem_model": settings.get("model", DEFAULT_MODEL),
             "model_ready": False,
+            "ollama_installed": False,
+            "message": "Ollama is not installed or not running. Install from https://ollama.com, then run: ollama serve",
+        })
+    except Exception as e:
+        return jsonify({
+            "ollama": False,
+            "models": [],
+            "stem_model": settings.get("model", DEFAULT_MODEL),
+            "model_ready": False,
+            "ollama_installed": False,
+            "message": f"Ollama error: {e}",
         })
 
 
