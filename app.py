@@ -86,14 +86,17 @@ def save_settings(settings):
 # ---------- Ollama helpers ----------
 
 def _extract_text(msg):
-    """Extract only the answer content from an Ollama message.
+    """Extract the answer text from an Ollama message.
     
-    Reasoning models like gemma4 put their internal thinking process in a
-    separate 'thinking' field. We hide that from the user and only show
-    the final 'content' answer.
+    Returns the 'content' field when available. If 'content' is empty
+    (some models like gemma4 put the answer in 'thinking' instead),
+    falls back to 'thinking' so the user still gets an answer.
     """
     content = msg.get("content", "") or ""
-    return content
+    if content:
+        return content
+    thinking = msg.get("thinking", "") or ""
+    return thinking
 
 
 def ollama_chat(model, messages, temperature=0.7, top_p=0.9, top_k=40,
