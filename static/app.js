@@ -123,6 +123,112 @@ function escapeHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+
+function setAccent(color) {
+  document.documentElement.style.setProperty("--accent", color);
+  document.body.dataset.accent = color;
+}
+
+
+function renderMarkdown(text) {
+  let html = escapeHtml(text);
+
+  // Code blocks ``` ... ```
+  html = html.replace(/```([\s\S]*?)```/g, (match, code) => {
+    return `<pre class="code-block">${escapeHtml(code.trim())}</pre>`;
+  });
+
+  // Inline code ` ... `
+  html = html.replace(/`([^`]+)`/g, '<code class="inline">$1</code>');
+
+  // Display math $$ ... $$
+  html = html.replace(/\$\$([\s\S]*?)\$\$/g, (match, math) => {
+    return `<div class="math-block">📐 ${escapeHtml(math.trim())}</div>`;
+  });
+
+  // Inline math $ ... $
+  html = html.replace(/\$([^\n$]+?)\$/g, '<code class="inline math-inline">📐 $1</code>');
+
+  // Bold ** ... **
+  html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  // Italic * ... *
+  html = html.replace(/\*([^*]+?)\*/g, '<i>$1</i>');
+
+  // Line breaks -> <br>
+  html = html.replace(/\n/g, "<br>");
+
+  // Bullet lines
+  html = html.replace(/(^|<br>)([-•])\s+/g, '$1<div class="bullet"><span class="dot"></span><span>$&</span></div>');
+  html = html.replace(/<div class="bullet"><span class="dot"><\/span><span>(?:[-•])\s*(.*?)<\/span><\/div>/g, '<div class="bullet"><span class="dot"></span><span>$1</span></div>');
+
+  return html;
+}
+
+
+function addMsg(text, who, renderHtml = true, chatId = null) {
+  const div = document.createElement("div");
+  div.className = `msg ${who}`;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+
+  const actions = document.createElement("div");
+  actions.className = "msg-actions";
+  actions.innerHTML = `
+    <button class="action-copy" title="Copy">📋</button>
+    ${who === "bot" ? '<button class="action-regen" title="Regenerate">↻</button>' : ""}
+    ${who === "user" ? '<button class="action-delete" title="Delete">🗑</button>' : ""}
+  `;
+  bubble.appendChild(actions);
+
+  if (renderHtml && text) {
+    bubble.innerHTML = renderMarkdown(text);
+    bubble.appendChild(actions);
+  } else {
+    bubble.textContent = text;
+    bubble.appendChild(actions);
+  }
+
+  div.appendChild(bubble);
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+
+  const copyBtn = actions.querySelector(".action-copy");
+  copyBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const content = who === "bot" ? bubble.textContent : text;
+    navigator.clipboard.writeText(content).then(() => {
+      const orig = copyBtn.textContent;
+      copyBtn.textContent = "✓";
+      setTimeout(() => { copyBtn.textContent = orig; }, 900);
+    });
+  });
+
+  const regenBtn = actions.querySelector(".action-regen");
+  if (regenBtn) {
+    regenBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      regenerateLast(div);
+    });
+  }
+
+  const delBtn = actions.querySelector(".action-delete");
+  if (delBtn) {
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (confirm("Delete this message?")) div.remove();
+    });
+  }
+
+  return div;
+}
+
+
+function setSending(enabled) {
+  sendBtn.disabled = !enabled;
+  userInput.disabled = !enabled;
+  if (enabled) userInput.focus();
+}
+
 // Strip markdown artifacts (**, $$, $, *) from model replies
 function cleanMarkdown(text) {
   return String(text)
