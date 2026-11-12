@@ -323,6 +323,11 @@ async function streamChat(payload) {
             currentBotBubble.classList.remove("thinking");
             return;
           }
+          if (data.start) {
+            // Request is processing, keep thinking indicator visible
+            currentBotBubble.classList.add("thinking");
+            return;
+          }
           if (data.done) {
             currentBotBubble.classList.remove("thinking");
             const chatId = data.chat_id;

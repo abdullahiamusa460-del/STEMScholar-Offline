@@ -489,6 +489,9 @@ def api_chat():
                 full = ""
                 last_yield = time.time()
                 try:
+                    # Immediate start event so client knows request is processing
+                    yield "data: " + json.dumps({"start": True}) + "\n\n"
+                    last_yield = time.time()
                     # Use non-streaming call to get complete answer (content only),
                     # since gemma4 puts reasoning in 'thinking' field during streaming
                     r = ollama_chat(
@@ -498,14 +501,14 @@ def api_chat():
                     data = r.json()
                     full = _extract_text(data.get("message", {}))
                     # Simulate streaming by yielding in small chunks
-                    chunk_size = 30
+                    chunk_size = 40
                     for i in range(0, len(full), chunk_size):
                         piece = full[i:i + chunk_size]
                         yield "data: " + json.dumps({"chunk": piece}) + "\n\n"
                         last_yield = time.time()
                         # Small delay to simulate typing
                         import time as _t
-                        _t.sleep(0.03)
+                        _t.sleep(0.05)
                     assistant_msg = {
                         "role": "assistant",
                         "content": full,
